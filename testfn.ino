@@ -16,6 +16,9 @@ const char* apiUrlReset = "https://ac.control.desmoco.com.tw/index.php?action=re
 const uint16_t kIrLed = 4; 
 IRsend irsend(kIrLed);
 
+// --- 伺服器時間 ---
+String serverTime = ""; // 儲存最近一次 API 回應的伺服器時間
+
 // --- 2. 紅外線原始代碼 (Raw Data) ---
 // 功能鍵 冷氣
 uint16_t fn2ac[139] = {8944, 4556,  660, 1648,  660, 546,  658, 548,  658, 1648,  660, 1648,  634, 572,  660, 546,  658, 546,  660, 546,  582, 1724,  634, 1674,  660, 546,  658, 548,  630, 574,  606, 600,  582, 622,  632, 572,  634, 572,  658, 548,  658, 546,  660, 546,  658, 1648,  632, 1676,  632, 572,  608, 598,  634, 572,  584, 622,  608, 598,  632, 1674,  632, 572,  632, 1674,  608, 598,  606, 598,  608, 1700,  606, 598,  608, 20034,  608, 598,  632, 572,  632, 574,  608, 598,  608, 596,  608, 598,  608, 596,  608, 596,  608, 598,  610, 596,  608, 598,  632, 572,  634, 572,  608, 1698,  610, 594,  610, 596,  608, 596,  610, 596,  608, 596,  610, 596,  610, 596,  608, 596,  610, 596,  610, 596,  610, 596,  610, 596,  608, 596,  608, 596,  610, 1696,  610, 1698,  610, 596,  608, 1700,  610};
@@ -63,18 +66,31 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED) {
     HTTPClient http;
     http.begin(apiUrl);
+
+    // 收集 Date 標頭以取得伺服器時間
+    const char* headerKeys[] = {"Date"};
+    http.collectHeaders(headerKeys, 1);
+
     int httpCode = http.GET();
 
     if (httpCode > 0) {
+      // 取得伺服器時間並存入變數
+      if (http.hasHeader("Date")) {
+        // HTTP Date 格式: "Wed, 02 Jul 2026 10:03:41 GMT"
+        // 只保留時間段，索引 17~24，共 8 碼
+        serverTime = http.header("Date").substring(17, 25);
+        Serial.println("伺服器時間: " + serverTime);
+      }
+
       String payload = http.getString();
-      Serial.println("收到資料: " + payload);
 
       // 解析 JSON
       StaticJsonDocument<200> doc;
       DeserializationError error = deserializeJson(doc, payload);
 
       if (!error) {
-        String cmd = doc["cmd"]; // 取得 API 中的指令字串
+        String cmd = doc["command"]; // 取得 API 中的指令字串
+        bool done = doc["done"];     // 取得指令是否已執行完畢
 
         // 'reset' 代表無待執行指令，直接略過
         if (cmd == "reset") {
@@ -83,11 +99,18 @@ void loop() {
           return;
         }
 
-        at_section(3); // 發送訊號閃三下提示
-        executeCommand(cmd);     // 跳轉到判斷邏輯
+        // done 為 true 代表指令已執行完畢，略過不重複執行
+        if (done) {
+          http.end();
+          delay(3000);
+          return;
+        }
 
-        // 執行完畢後，通知伺服器重置指令，避免重複執行
-        resetStatus();
+        at_section(3); // 發送訊號閃三下提示
+
+        executeCommand(cmd);     // 跳轉到判斷邏輯
+        resetStatus(); // 執行完畢後，通知伺服器重置指令，避免重複執行
+
       }
     }
     http.end();
@@ -132,6 +155,24 @@ void executeCommand(String cmd) {
   }
   else {
     Serial.println("未知指令: " + cmd);
+  }
+}
+
+void timing(String cmd) {
+
+  // 解析 JSON
+  StaticJsonDocument<200> doc;
+  DeserializationError error = deserializeJson(doc, cmd);
+
+  if (!error) {
+    // 比對時間: (打台灣台北地區時間api以取得時間)
+
+
+    // 時間到:執行程式
+
+    // 時間未到:跳出本函式
+  } else {
+    Serial.println("JSON 解析錯誤: " + String(error.c_str()));
   }
 }
 
