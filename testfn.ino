@@ -6,6 +6,7 @@
 #include <ArduinoJson.h> // 請確保已安裝 ArduinoJson 程式庫
 #include <IRremoteESP8266.h>
 #include <IRsend.h>
+#include <DHT.h> // 請確保已安裝 "DHT sensor library" 及其相依套件 "Adafruit Unified Sensor"
 
 // --- 1. 基礎設定 ---
 const char* ssid = "TP-Link_9B2E";
@@ -15,6 +16,14 @@ const char* apiUrlReset = "https://ac.control.desmoco.com.tw/index.php?action=re
 
 const uint16_t kIrLed = 4; 
 IRsend irsend(kIrLed);
+
+// --- DHT22 溫濕度感測器設定 ---
+// GPIO4 已被紅外線 LED 使用，且需避開 ESP32 的 strapping pin (0,2,5,12,15)
+// 故選用 GPIO27 作為 DHT22 資料腳位
+#define DHTPIN 27
+#define DHTTYPE DHT22
+DHT dht(DHTPIN, DHTTYPE);
+float lastTemperature = NAN; // 快取最近一次讀取成功的溫度
 
 // --- 伺服器時間 ---
 String serverTime = ""; // 儲存最近一次 API 回應的伺服器時間
@@ -48,6 +57,7 @@ void setup() {
   Serial.begin(115200);
   irsend.begin();
   pinMode(LED_BUILTIN, OUTPUT);
+  dht.begin(); // 初始化 DHT22
 
   // 連接 WiFi
   WiFi.begin(ssid, password);
@@ -63,9 +73,41 @@ void setup() {
 }
 
 void loop() {
+  // 讀取 DHT22 溫度（讀取失敗時沿用上一次成功的數值，避免傳送 NaN）
+  float temperature = dht.readTemperature();
+  float humidity = dht.readHumidity(); // 濕度僅用於測試階段輸出確認，暫不上傳
+  if (isnan(temperature)) {
+    Serial.println("DHT22 讀取失敗，沿用上次數值");
+    temperature = lastTemperature;
+  } else {
+    lastTemperature = temperature;
+  }
+
+  // --- 測試用：將 DHT22 讀值直接輸出至序列埠(Serial Monitor)，方便確認感測器是否正常 ---
+  Serial.print("[DHT22] 溫度: ");
+  if (isnan(temperature)) {
+    Serial.print("讀取失敗");
+  } else {
+    Serial.print(temperature, 1);
+    Serial.print(" C");
+  }
+  Serial.print("  濕度: ");
+  if (isnan(humidity)) {
+    Serial.println("讀取失敗");
+  } else {
+    Serial.print(humidity, 1);
+    Serial.println(" %");
+  }
+
   if (WiFi.status() == WL_CONNECTED) {
     HTTPClient http;
-    http.begin(apiUrl);
+
+    // 將溫度以 URL 參數附加送出（讀取失敗時不附加）
+    String requestUrl = apiUrl;
+    if (!isnan(temperature)) {
+      requestUrl += "&temp=" + String(temperature, 1);
+    }
+    http.begin(requestUrl);
 
     // 收集 Date 標頭以取得伺服器時間
     const char* headerKeys[] = {"Date"};
